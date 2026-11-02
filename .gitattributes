@@ -1,0 +1,6 @@
+# Shell scripts, patches and the files the smoke test vendors must stay LF on
+# every checkout: the build runs on Linux and git apply is picky.
+* text=auto eol=lf
+*.tar binary
+*.gz binary
+*.wasm binary
