@@ -29,7 +29,7 @@ The WebFlash Pages deploy downloads `toolchain.tar`, reads `manifest.json` from 
 | Arm Toolchain for Embedded | `release-23.1.0-ATfE` (`ATfE-23.1.0-Linux-x86_64.tar.xz`, sha256 pinned) | `versions.toml` |
 | Build number | `[build].number`, overridden by a pushed `build-<n>` tag | `versions.toml`, the workflow |
 
-One patch is applied to LLVM, `patches/0001-main-executable-under-emscripten.patch`: under Emscripten `getMainExecutable()` trusts `argv[0]` when it names an existing file, so that clang run as `/sysroot/bin/llvm` finds its resource directory (`/sysroot/lib/clang/23`), `ld.lld` and the `multilib.yaml` of the sysroot by itself.
+Two patches are applied to LLVM. `patches/0001-main-executable-under-emscripten.patch`: under Emscripten `getMainExecutable()` trusts `argv[0]` when it names an existing file, so that clang run as `/sysroot/bin/llvm` finds its resource directory (`/sysroot/lib/clang/23`), `ld.lld` and the `multilib.yaml` of the sysroot by itself. `patches/0002-driver-tool-symlinks.patch`: in a multicall driver build, `llvm_add_tool_symlink` must not evaluate `$<TARGET_FILE>` of a tool that became a custom target (the aliases such as `llvm-strip` and `llvm-readelf` are generated against the driver anyway); without it CMake's generate step fails for llvm-ar, llvm-objcopy, llvm-objdump and llvm-readobj. The driver holds exactly the ten tools of the manifest; the other tools that would join it (`dsymutil`, `llvm-symbolizer`, `llvm-rc` and so on) are switched off with their `LLVM_TOOL_<NAME>_BUILD` options.
 
 ## The sysroot and the multilib map
 
