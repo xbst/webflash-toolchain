@@ -37,6 +37,18 @@ LINK_FLAGS="$LINK_FLAGS -sEXPORTED_RUNTIME_METHODS=FS,callMain,ENV -sEXPORTED_FU
 LINK_FLAGS="$LINK_FLAGS -sFORCE_FILESYSTEM=1 -sNODEJS_CATCH_EXIT=0 -sNODEJS_CATCH_REJECTION=0"
 LINK_FLAGS="$LINK_FLAGS -sASSERTIONS=0 -sSTACK_OVERFLOW_CHECK=0"
 
+# Tools that would otherwise join the multicall driver (every tool declared
+# with GENERATE_DRIVER) but that WebFlash does not ship. Switching their
+# directories off keeps them out of llvm.wasm. The driver keeps clang, lld,
+# llvm-ar, llvm-nm, llvm-objcopy, llvm-objdump, llvm-readobj and llvm-size.
+UNWANTED_DRIVER_TOOLS="dsymutil llvm-cgdata llvm-cxxfilt llvm-debuginfod llvm-debuginfod-find llvm-dwp
+  llvm-gsymutil llvm-ifs llvm-libtool-darwin llvm-lipo llvm-ml llvm-mt llvm-rc llvm-readtapi
+  llvm-symbolizer sancov"
+TOOL_ARGS=""
+for tool in $UNWANTED_DRIVER_TOOLS; do
+  TOOL_ARGS="$TOOL_ARGS -DLLVM_TOOL_$(echo "$tool" | tr 'a-z-' 'A-Z_')_BUILD=OFF"
+done
+
 LTO_ARGS=""
 if [ "$LTO" != 0 ]; then
   mkdir -p "$LTO_CACHE"
@@ -105,6 +117,7 @@ emcmake cmake -G Ninja -S "$LLVM_SRC/llvm" -B "$STAGE2" \
   -DCLANG_DEFAULT_LINKER=lld \
   -DCLANG_DEFAULT_RTLIB=compiler-rt \
   -DCLANG_DEFAULT_UNWINDLIB=none \
+  $TOOL_ARGS \
   $LTO_ARGS
 
 log "building the llvm multicall module and the resource headers with $JOBS jobs"

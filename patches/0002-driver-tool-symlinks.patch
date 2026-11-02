@@ -1,0 +1,16 @@
+diff --git a/llvm/cmake/modules/AddLLVM.cmake b/llvm/cmake/modules/AddLLVM.cmake
+index a267166..485f2d9 100644
+--- a/llvm/cmake/modules/AddLLVM.cmake
++++ b/llvm/cmake/modules/AddLLVM.cmake
+@@ -2489,6 +2489,11 @@ function(llvm_add_tool_symlink project link_name target)
+ 
+   if (${target} IN_LIST LLVM_DRIVER_TOOLS)
+     set_property(GLOBAL APPEND PROPERTY LLVM_DRIVER_TOOL_ALIASES_${target} ${link_name})
++    # The tool is part of the llvm multicall driver: its alias is created
++    # against llvm-driver by generate_driver_tool_targets(), and the tool's
++    # own target is a custom target with no $<TARGET_FILE> (the same guard
++    # llvm_install_symlink has).
++    return()
+   endif()
+   set(dest_binary "$<TARGET_FILE:${target}>")
+ 
