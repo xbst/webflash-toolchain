@@ -25,7 +25,8 @@ for f in manifest.json llvm.js llvm.wasm.gz toolchain.js sysroot.tar.gz sysroot-
 done
 cp -r "$DIST/licenses" "$PACKAGE_DIR/stage/licenses"
 tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner --format=gnu \
-  -C "$PACKAGE_DIR/stage" -cf "$PACKAGE_DIR/toolchain-$TOOLCHAIN_ID.tar" .
+  -C "$PACKAGE_DIR/stage" -cf "$PACKAGE_DIR/toolchain-$TOOLCHAIN_ID.tar" \
+  manifest.json llvm.js llvm.wasm.gz toolchain.js sysroot.tar.gz sysroot-cxx.tar.gz licenses
 cp "$PACKAGE_DIR/toolchain-$TOOLCHAIN_ID.tar" "$PACKAGE_DIR/toolchain.tar"
 rm -rf "$PACKAGE_DIR/stage"
 ls -l "$PACKAGE_DIR"
