@@ -16,6 +16,7 @@ export WEBFLASH_REPORT="${WEBFLASH_REPORT:-$ROOT/smoke-report.json}"
 log "node $(node --version), toolchain $(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['id'])" "$WEBFLASH_TOOLCHAIN_DIR/manifest.json")"
 
 cd "$REPO"
-node --test tests/
+# The files are named: Node 24 takes a directory argument as a module to load.
+node --test tests/unit.test.mjs tests/smoke.test.mjs
 log "report"
 cat "$WEBFLASH_REPORT"

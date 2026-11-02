@@ -143,7 +143,7 @@ scripts/20-build-tablegen.sh   stage 1: native llvm-tblgen, llvm-min-tblgen, cla
 scripts/30-build-llvm.sh       stage 2: emcmake build of the llvm multicall module (LTO=0 skips ThinLTO)
 scripts/40-sysroot.sh          download ATfE, assemble and pack sysroot.tar.gz and sysroot-cxx.tar.gz
 scripts/50-package.sh          manifest.json and toolchain-<id>.tar
-scripts/60-smoke.sh            clone Klipper, generate autoconf.h, node --test tests/
+scripts/60-smoke.sh            clone Klipper, generate autoconf.h, node --test on tests/*.test.mjs
 ```
 
 `ROOT` sets the build root (default `build/`), `JOBS` the parallelism. The `Dockerfile` runs the same stages in an Ubuntu image (`docker build -t webflash-toolchain .`). `node --test tests/unit.test.mjs` runs the parts that need no build.
