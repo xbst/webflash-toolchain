@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Stage 1a: a sparse, shallow clone of llvm-project at the pinned tag, with
 # the patches of patches/ applied. Only the subtrees the build reads are
-# checked out (cmake, llvm, clang, lld, third-party), which keeps the clone
-# under a gigabyte.
+# checked out, which keeps the clone under a gigabyte: cmake, llvm, clang,
+# lld, third-party, and libc because llvm/CMakeLists.txt unconditionally
+# includes FindLibcCommonUtils, which needs the libc sources to exist.
 source "$(dirname "$0")/common.sh"
 
-SUBTREES="cmake llvm clang lld third-party"
+SUBTREES="cmake llvm clang lld third-party libc"
 
 if [ ! -d "$LLVM_SRC/.git" ]; then
   log "cloning llvm-project $LLVM_TAG (sparse, depth 1)"
