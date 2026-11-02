@@ -142,6 +142,7 @@ jobs:
           key: lto-v1-${{ needs.pins.outputs.stamp }}-${{ github.run_id }}
           restore-keys: |
             lto-v1-${{ needs.pins.outputs.stamp }}-
+            lto-v1-
       - name: Install Emscripten
         run: scripts/00-setup-emsdk.sh
       - name: Fetch llvm-project
@@ -164,7 +165,10 @@ jobs:
           key: lto-v1-${{ needs.pins.outputs.stamp }}-${{ github.run_id }}
       - name: Sizes
         run: ls -l build/dist/ && df -h /
+      # Uploaded even after a failure: whatever the build produced before it
+      # stopped is what the next diagnosis needs.
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: llvm-wasm
           path: |
