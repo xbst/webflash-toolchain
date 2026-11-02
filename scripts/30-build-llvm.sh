@@ -130,8 +130,20 @@ mkdir -p "$DIST"
 cp "$STAGE2/bin/llvm.js" "$DIST/llvm.js"
 cp "$STAGE2/bin/llvm.wasm" "$DIST/llvm.wasm"
 gzip -9 -n -k -f "$DIST/llvm.wasm"
-rm -rf "$DIST/clang-headers"
-cp -r "$STAGE2/lib/clang/$LLVM_MAJOR/include" "$DIST/clang-headers"
+# The clang resource headers, limited to the core and ARM groups. Their build
+# targets above only generate arm_neon.h and friends: the copies into
+# lib/clang/<major>/include hang off the catch-all clang-resource-headers
+# target, which would bring the x86, CUDA, HIP, OpenCL, ... headers along.
+# The groups' install components copy exactly the right files instead.
+HEADERS_PREFIX="$ROOT/clang-headers-install"
+rm -rf "$HEADERS_PREFIX" "$DIST/clang-headers"
+for component in core-resource-headers arm-common-resource-headers arm-resource-headers; do
+  cmake --install "$STAGE2" --component "$component" --prefix "$HEADERS_PREFIX"
+done
+cp -r "$HEADERS_PREFIX/lib/clang/$LLVM_MAJOR/include" "$DIST/clang-headers"
+for header in stddef.h stdint.h stdarg.h stdbool.h float.h limits.h arm_acle.h arm_neon.h arm_cmse.h arm_mve.h; do
+  [ -f "$DIST/clang-headers/$header" ] || die "clang resource header $header is missing from $DIST/clang-headers"
+done
 
 ls -l "$DIST"
 echo "clang resource headers: $(find "$DIST/clang-headers" -type f | wc -l) files"
