@@ -1,0 +1,29 @@
+diff --git a/llvm/lib/Support/Unix/Path.inc b/llvm/lib/Support/Unix/Path.inc
+index d019673..1aa9358 100644
+--- a/llvm/lib/Support/Unix/Path.inc
++++ b/llvm/lib/Support/Unix/Path.inc
+@@ -130,7 +130,7 @@ const file_t kInvalidFile = -1;
+     defined(__CYGWIN__) || defined(__DragonFly__) || defined(_AIX) ||          \
+     defined(__GNU__) ||                                                        \
+     (defined(__sun__) && defined(__svr4__) || defined(__HAIKU__)) ||           \
+-    defined(__managarm__)
++    defined(__managarm__) || defined(__EMSCRIPTEN__)
+ static int test_dir(char ret[PATH_MAX], const char *dir, const char *bin) {
+   struct stat sb;
+   char fullpath[PATH_MAX];
+@@ -194,7 +194,14 @@ static char *getprogpath(char ret[PATH_MAX], const char *bin) {
+ std::string getMainExecutable(const char *argv0, void *MainAddr) {
+   auto BypassSandbox = sandbox::scopedDisable();
+ 
+-#if defined(__APPLE__)
++#if defined(__EMSCRIPTEN__)
++  // There is no /proc/self/exe under Emscripten and dladdr() cannot name the
++  // program, so trust argv[0] when it names an existing file.  WebFlash runs
++  // the tools as /sysroot/bin/<tool> with placeholder files at those paths.
++  char exe_path[PATH_MAX];
++  if (getprogpath(exe_path, argv0) != nullptr)
++    return exe_path;
++#elif defined(__APPLE__)
+   // On OS X the executable path is saved to the stack by dyld. Reading it
+   // from there is much faster than calling dladdr, especially for large
+   // binaries with symbols.

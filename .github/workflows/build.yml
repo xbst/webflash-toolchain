@@ -1,0 +1,268 @@
+# Builds the toolchain, runs the smoke test and publishes a GitHub Release.
+#
+# Triggers:
+#   push of a tag build-<n>      release with build number n
+#   workflow_dispatch            build number from versions.toml (or the input);
+#                                "release: false" only builds and tests
+#
+# Stages (one job each so that a failure late in the pipeline keeps the
+# expensive artifacts, and so that ccache is saved even when a job fails):
+#   tablegen  native TableGen tools, cached by LLVM tag
+#   llvm      the Emscripten build (hours on a cold cache, minutes when ccache
+#             and the ThinLTO cache are warm)
+#   package   sysroot from the ATfE release, manifest.json, toolchain-<id>.tar
+#   test      node --test against the package
+#   release   gh release create <id> with toolchain-<id>.tar and toolchain.tar
+name: build
+
+on:
+  push:
+    tags: ["build-*"]
+  workflow_dispatch:
+    inputs:
+      build:
+        description: "Build number (default: versions.toml)"
+        required: false
+        default: ""
+      release:
+        description: "Publish a GitHub Release"
+        type: boolean
+        default: true
+      lto:
+        description: "ThinLTO for the wasm module"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build
+  cancel-in-progress: false
+
+env:
+  ROOT: ${{ github.workspace }}/build
+  CCACHE_MAXSIZE: 4G
+
+jobs:
+  pins:
+    runs-on: ubuntu-24.04
+    outputs:
+      id: ${{ steps.pins.outputs.id }}
+      llvm_tag: ${{ steps.pins.outputs.llvm_tag }}
+      build: ${{ steps.pins.outputs.build }}
+      stamp: ${{ steps.pins.outputs.stamp }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve the build number and the toolchain id
+        id: pins
+        run: |
+          case "${GITHUB_REF}" in
+            refs/tags/build-*) export WEBFLASH_BUILD_NUMBER="${GITHUB_REF#refs/tags/build-}" ;;
+          esac
+          if [ -n "${{ github.event.inputs.build }}" ]; then export WEBFLASH_BUILD_NUMBER="${{ github.event.inputs.build }}"; fi
+          eval "$(python3 scripts/versions.py)"
+          echo "id=$TOOLCHAIN_ID" >> "$GITHUB_OUTPUT"
+          echo "llvm_tag=$LLVM_TAG" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "stamp=${{ hashFiles('versions.toml', 'patches/**', 'scripts/10-fetch-llvm.sh', 'scripts/20-build-tablegen.sh', 'scripts/30-build-llvm.sh') }}" >> "$GITHUB_OUTPUT"
+          echo "toolchain id: $TOOLCHAIN_ID"
+      - name: Refuse to rebuild an existing release
+        if: ${{ github.event_name == 'push' || github.event.inputs.release != 'false' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${{ steps.pins.outputs.id }}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release ${{ steps.pins.outputs.id }} already exists; bump [build].number in versions.toml or push a new build-<n> tag"
+            exit 1
+          fi
+
+  tablegen:
+    needs: pins
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore the native tools
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/stage1/bin
+          key: tablegen-v1-${{ needs.pins.outputs.llvm_tag }}
+      - name: Install build tools
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build ccache cmake
+      - name: Fetch llvm-project
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: scripts/10-fetch-llvm.sh
+      - name: Build llvm-tblgen, llvm-min-tblgen and clang-tblgen
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: scripts/20-build-tablegen.sh
+      - name: Save the native tools
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/stage1/bin
+          key: tablegen-v1-${{ needs.pins.outputs.llvm_tag }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-tools
+          path: build/stage1/bin/
+          retention-days: 3
+
+  llvm:
+    needs: [pins, tablegen]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build ccache cmake
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-tools
+          path: build/stage1/bin
+      - run: chmod +x build/stage1/bin/*
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/ccache
+          key: ccache-v1-${{ needs.pins.outputs.stamp }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-v1-${{ needs.pins.outputs.stamp }}-
+            ccache-v1-
+      - name: Restore the ThinLTO cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/lto.cache
+          key: lto-v1-${{ needs.pins.outputs.stamp }}-${{ github.run_id }}
+          restore-keys: |
+            lto-v1-${{ needs.pins.outputs.stamp }}-
+      - name: Install Emscripten
+        run: scripts/00-setup-emsdk.sh
+      - name: Fetch llvm-project
+        run: scripts/10-fetch-llvm.sh
+      - name: Build the llvm multicall module
+        env:
+          LTO: ${{ github.event.inputs.lto == 'false' && '0' || '1' }}
+        run: scripts/30-build-llvm.sh
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: build/ccache
+          key: ccache-v1-${{ needs.pins.outputs.stamp }}-${{ github.run_id }}
+      - name: Save the ThinLTO cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: build/lto.cache
+          key: lto-v1-${{ needs.pins.outputs.stamp }}-${{ github.run_id }}
+      - name: Sizes
+        run: ls -l build/dist/ && df -h /
+      - uses: actions/upload-artifact@v4
+        with:
+          name: llvm-wasm
+          path: |
+            build/dist/llvm.js
+            build/dist/llvm.wasm.gz
+            build/dist/clang-headers/
+          retention-days: 7
+
+  package:
+    needs: [pins, llvm]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: llvm-wasm
+          path: build/dist
+      - name: Sysroot from the Arm Toolchain for Embedded release
+        run: scripts/40-sysroot.sh
+      - name: manifest.json and toolchain-${{ needs.pins.outputs.id }}.tar
+        env:
+          WEBFLASH_BUILD_NUMBER: ${{ needs.pins.outputs.build }}
+        run: scripts/50-package.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: toolchain-package
+          path: build/package/toolchain-${{ needs.pins.outputs.id }}.tar
+          retention-days: 30
+
+  test:
+    needs: [pins, package]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          name: toolchain-package
+          path: build/package
+      - name: Unpack the release
+        run: |
+          mkdir -p build/release
+          tar -xf build/package/toolchain-${{ needs.pins.outputs.id }}.tar -C build/release
+          ls -l build/release
+      - name: Unit tests
+        run: node --test tests/unit.test.mjs
+      - name: Smoke test (SPEC 8.5)
+        env:
+          WEBFLASH_TOOLCHAIN_DIR: ${{ github.workspace }}/build/release
+          WEBFLASH_REPORT: ${{ github.workspace }}/build/smoke-report.json
+          CI: "1"
+        run: scripts/60-smoke.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-report
+          path: build/smoke-report.json
+          retention-days: 90
+
+  release:
+    needs: [pins, package, test]
+    if: ${{ github.event_name == 'push' || github.event.inputs.release != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: toolchain-package
+          path: build/package
+      - uses: actions/download-artifact@v4
+        with:
+          name: smoke-report
+          path: build
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ID: ${{ needs.pins.outputs.id }}
+        run: |
+          cd build/package
+          cp "toolchain-$ID.tar" toolchain.tar
+          tar -xOf toolchain.tar manifest.json > manifest.json
+          {
+            echo "WebFlash toolchain \`$ID\`: clang, lld and the LLVM binutils built to WebAssembly with the ARM backend, plus a picolibc sysroot."
+            echo
+            echo "| Pin | Version |"
+            echo "|---|---|"
+            python3 -c 'import json; m = json.load(open("manifest.json")); print(f"| LLVM | {m[\"llvm\"]} |\n| Arm Toolchain for Embedded | {m[\"atfe\"]} |\n| Emscripten | {m[\"emscripten\"]} |")'
+            echo
+            echo "| File | Bytes |"
+            echo "|---|---|"
+            python3 -c 'import json; m = json.load(open("manifest.json")); [print(f"| {k} | {v[\"size\"]} |") for k, v in m["files"].items()]'
+            echo
+            echo "Smoke test report: see the \`smoke-report\` artifact of the workflow run."
+          } > notes.md
+          gh release create "$ID" --repo "$GITHUB_REPOSITORY" --title "$ID" --notes-file notes.md --latest \
+            "toolchain-$ID.tar" "toolchain.tar"

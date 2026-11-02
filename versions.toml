@@ -1,0 +1,52 @@
+# Pinned versions of everything the build downloads. The STATUS.md of the main
+# WebFlash repository mirrors these pins; change them here and there together.
+# scripts/versions.py turns this file into shell variables, scripts/manifest.py
+# reads it when writing manifest.json.
+
+[llvm]
+# The newest stable LLVM release at the time of the build. LuvHakii/llvm-wasm
+# builds 23.1.2 with Emscripten 6.0.10, so the 23.1.x line is known to build.
+tag = "llvmorg-23.1.4"
+version = "23.1.4"
+major = 23
+
+[emscripten]
+# The version LuvHakii/llvm-wasm pins. Newer 6.0.x releases should also work.
+version = "6.0.10"
+
+[atfe]
+# Arm Toolchain for Embedded: the source of picolibc and the compiler-rt
+# builtins for every Cortex-M variant. Based on LLVM 23.1.0.
+tag = "release-23.1.0-ATfE"
+version = "23.1.0"
+asset = "ATfE-23.1.0-Linux-x86_64.tar.xz"
+sha256 = "a7be511613af15151c93961ad39c8cf9ae6889a453c8b547f42f4051a416dc8e"
+
+[build]
+# Bumped for every release of the same LLVM and ATfE versions. The release
+# workflow overrides it with the number of a pushed build-<n> tag or with the
+# workflow_dispatch input. The toolchain id is llvm<ver>-atfe<ver>-build<n>.
+number = 1
+
+[sysroot]
+# Everything below describes what goes into sysroot.tar.gz and manifest.json.
+target = "arm-none-eabi"
+# The libraries copied from each multilib directory of the ATfE release.
+libs = ["libc.a", "libm.a", "libclang_rt.builtins.a"]
+# The tools exposed by the llvm multicall module, dispatched on argv[0].
+tools = [
+  "clang", "clang++", "ld.lld", "llvm-objcopy", "llvm-objdump", "llvm-readelf",
+  "llvm-ar", "llvm-nm", "llvm-strip", "llvm-size",
+]
+
+# ATfE library variant directory -> the -mcpu values it serves. Klipper builds
+# every Cortex-M target as soft float without FPU flags, so only the
+# "soft_nofp" variants are shipped. ATfE 23 has no armv7em library: Cortex-M4
+# and Cortex-M7 use the armv7m one (v7E-M is a superset of v7-M, and clang's
+# own multilib.yaml maps thumbv7em to thumbv7m). The "unaligned" variants are
+# the ones clang selects for v7-M and v8-M Mainline, whose default is
+# -munaligned-access; v6-M has no unaligned access, hence the plain variant.
+[sysroot.multilibs]
+"armv6m_soft_nofp_size" = ["cortex-m0", "cortex-m0plus"]
+"armv7m_soft_nofp_unaligned_size" = ["cortex-m3", "cortex-m4", "cortex-m7"]
+"armv8m.main_soft_nofp_unaligned_size" = ["cortex-m33"]

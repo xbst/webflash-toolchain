@@ -1,0 +1,7 @@
+# Build root of the scripts (override with ROOT=...)
+/build/
+# Local scratch
+/out/
+/.claude/
+/node_modules/
+*.log
