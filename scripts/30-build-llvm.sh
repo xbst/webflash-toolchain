@@ -33,8 +33,14 @@ LINK_FLAGS="-sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createLlvm"
 LINK_FLAGS="$LINK_FLAGS -sENVIRONMENT=web,worker,node"
 LINK_FLAGS="$LINK_FLAGS -sINVOKE_RUN=0 -sEXIT_RUNTIME=0"
 LINK_FLAGS="$LINK_FLAGS -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4GB -sINITIAL_MEMORY=64MB -sSTACK_SIZE=8MB"
-#   webflash_flush_streams  patch 0003: flushes llvm::outs() after an exit()
-LINK_FLAGS="$LINK_FLAGS -sEXPORTED_RUNTIME_METHODS=FS,callMain,ENV -sEXPORTED_FUNCTIONS=_main,_webflash_flush_streams"
+#   webflash_flush_streams  patch 0003: flushes llvm::outs() after an exit().
+#                     Exported with --export-if-defined, not EXPORTED_FUNCTIONS:
+#                     CMake's configure checks link test programs with these
+#                     flags too, and EXPORTED_FUNCTIONS fails any link that
+#                     lacks the symbol. toolchain.js looks it up by name, so the
+#                     export names are left unminified.
+LINK_FLAGS="$LINK_FLAGS -sEXPORTED_RUNTIME_METHODS=FS,callMain,ENV -sEXPORTED_FUNCTIONS=_main"
+LINK_FLAGS="$LINK_FLAGS -Wl,--export-if-defined=webflash_flush_streams -sMINIFY_WASM_IMPORTS_AND_EXPORTS=0"
 LINK_FLAGS="$LINK_FLAGS -sFORCE_FILESYSTEM=1 -sNODEJS_CATCH_EXIT=0 -sNODEJS_CATCH_REJECTION=0"
 LINK_FLAGS="$LINK_FLAGS -sASSERTIONS=0 -sSTACK_OVERFLOW_CHECK=0"
 

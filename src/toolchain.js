@@ -106,6 +106,7 @@ export async function createToolchain(options = {}) {
     const out = new ByteSink();
     const err = new ByteSink();
     let memoryRef = null;
+    let flushRef = null;
     let failInstantiate;
     const failed = new Promise((_, reject) => (failInstantiate = reject));
     const moduleArgs = {
@@ -115,8 +116,10 @@ export async function createToolchain(options = {}) {
       instantiateWasm(imports, receive) {
         WebAssembly.instantiate(wasmModule, imports).then(
           (instance) => {
-            // Export names inside the wasm are minified, so the memory is found by kind.
+            // The memory is found by kind (export names may be minified); the
+            // flush function by its name, which the build leaves unminified.
             memoryRef = Object.values(instance.exports).find((v) => v instanceof WebAssembly.Memory) ?? imports.env?.memory ?? null;
+            flushRef = typeof instance.exports.webflash_flush_streams === "function" ? instance.exports.webflash_flush_streams : null;
             receive(instance, wasmModule);
           },
           (e) => failInstantiate(e),
@@ -138,8 +141,7 @@ export async function createToolchain(options = {}) {
     if (!instance.FS || typeof instance.callMain !== "function") {
       throw new Error("llvm.js was not built with -sEXPORTED_RUNTIME_METHODS=FS,callMain,ENV");
     }
-    // The Module object carries the EXPORTED_FUNCTIONS under their real names.
-    const flush = typeof instance._webflash_flush_streams === "function" ? () => instance._webflash_flush_streams() : null;
+    const flush = flushRef ?? (typeof instance._webflash_flush_streams === "function" ? () => instance._webflash_flush_streams() : null);
     return { instance, out, err, flush, memoryBytes: () => memoryRef?.buffer?.byteLength ?? 0 };
   }
 
