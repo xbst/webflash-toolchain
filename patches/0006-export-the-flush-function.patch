@@ -1,0 +1,19 @@
+diff --git a/llvm/tools/llvm-driver/CMakeLists.txt b/llvm/tools/llvm-driver/CMakeLists.txt
+index 82d85c7..020da62 100644
+--- a/llvm/tools/llvm-driver/CMakeLists.txt
++++ b/llvm/tools/llvm-driver/CMakeLists.txt
+@@ -29,6 +29,14 @@ target_sources(llvm-driver PRIVATE llvm-driver.cpp)
+ 
+ set_target_properties(llvm-driver PROPERTIES OUTPUT_NAME llvm)
+ 
++if(EMSCRIPTEN)
++  # WebFlash: export webflash_flush_streams() (llvm-driver.cpp) to JavaScript.
++  # Only on this target, not in CMAKE_EXE_LINKER_FLAGS: CMake's configure checks
++  # link their test programs with those flags, and emcc refuses a link whose
++  # program lacks an exported function.
++  target_link_options(llvm-driver PRIVATE "-sEXPORTED_FUNCTIONS=_main,_webflash_flush_streams")
++endif()
++
+ target_link_libraries(llvm-driver PUBLIC ${LLVM_DRIVER_OBJLIBS})
+ target_link_libraries(llvm-driver PUBLIC LLVMDebuginfod)
+ 

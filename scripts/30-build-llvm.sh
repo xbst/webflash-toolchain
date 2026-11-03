@@ -33,14 +33,11 @@ LINK_FLAGS="-sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createLlvm"
 LINK_FLAGS="$LINK_FLAGS -sENVIRONMENT=web,worker,node"
 LINK_FLAGS="$LINK_FLAGS -sINVOKE_RUN=0 -sEXIT_RUNTIME=0"
 LINK_FLAGS="$LINK_FLAGS -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4GB -sINITIAL_MEMORY=64MB -sSTACK_SIZE=8MB"
-#   webflash_flush_streams  patch 0003: flushes llvm::outs() after an exit().
-#                     Exported with --export-if-defined, not EXPORTED_FUNCTIONS:
-#                     CMake's configure checks link test programs with these
-#                     flags too, and EXPORTED_FUNCTIONS fails any link that
-#                     lacks the symbol. toolchain.js looks it up by name, so the
-#                     export names are left unminified.
-LINK_FLAGS="$LINK_FLAGS -sEXPORTED_RUNTIME_METHODS=FS,callMain,ENV -sEXPORTED_FUNCTIONS=_main"
-LINK_FLAGS="$LINK_FLAGS -Wl,--export-if-defined=webflash_flush_streams -sMINIFY_WASM_IMPORTS_AND_EXPORTS=0"
+#   These flags also link CMake's configure test programs, so nothing here may
+#   name a symbol those programs lack: main() is exported by default, and
+#   webflash_flush_streams() of patch 0003 is exported by patch 0006 on the
+#   llvm-driver target alone (EXPORTED_FUNCTIONS is set there, nowhere else).
+LINK_FLAGS="$LINK_FLAGS -sEXPORTED_RUNTIME_METHODS=FS,callMain,ENV"
 LINK_FLAGS="$LINK_FLAGS -sFORCE_FILESYSTEM=1 -sNODEJS_CATCH_EXIT=0 -sNODEJS_CATCH_REJECTION=0"
 LINK_FLAGS="$LINK_FLAGS -sASSERTIONS=0 -sSTACK_OVERFLOW_CHECK=0"
 
@@ -125,7 +122,13 @@ emcmake cmake -G Ninja -S "$LLVM_SRC/llvm" -B "$STAGE2" \
   -DCLANG_DEFAULT_RTLIB=compiler-rt \
   -DCLANG_DEFAULT_UNWINDLIB=none \
   $TOOL_ARGS \
-  $LTO_ARGS
+  $LTO_ARGS || {
+    # A failed configure check only says "Failed"; the compiler's or linker's
+    # own message is in the configure log, and the failing check is its last entry.
+    echo "--- tail of $STAGE2/CMakeFiles/CMakeConfigureLog.yaml ---"
+    tail -n 200 "$STAGE2/CMakeFiles/CMakeConfigureLog.yaml" 2>/dev/null || true
+    die "stage 2 configure failed"
+  }
 
 log "building the llvm multicall module and the resource headers with $JOBS jobs"
 cmake --build "$STAGE2" -- -j"$JOBS" \
