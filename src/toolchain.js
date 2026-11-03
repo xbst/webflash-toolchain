@@ -105,7 +105,7 @@ export async function createToolchain(options = {}) {
   async function instantiate(env) {
     const out = new ByteSink();
     const err = new ByteSink();
-    let exportsRef = null;
+    let memoryRef = null;
     let failInstantiate;
     const failed = new Promise((_, reject) => (failInstantiate = reject));
     const moduleArgs = {
@@ -115,7 +115,8 @@ export async function createToolchain(options = {}) {
       instantiateWasm(imports, receive) {
         WebAssembly.instantiate(wasmModule, imports).then(
           (instance) => {
-            exportsRef = instance.exports;
+            // Export names inside the wasm are minified, so the memory is found by kind.
+            memoryRef = Object.values(instance.exports).find((v) => v instanceof WebAssembly.Memory) ?? imports.env?.memory ?? null;
             receive(instance, wasmModule);
           },
           (e) => failInstantiate(e),
@@ -137,7 +138,9 @@ export async function createToolchain(options = {}) {
     if (!instance.FS || typeof instance.callMain !== "function") {
       throw new Error("llvm.js was not built with -sEXPORTED_RUNTIME_METHODS=FS,callMain,ENV");
     }
-    return { instance, out, err, memoryBytes: () => exportsRef?.memory?.buffer?.byteLength ?? 0 };
+    // The Module object carries the EXPORTED_FUNCTIONS under their real names.
+    const flush = typeof instance._webflash_flush_streams === "function" ? () => instance._webflash_flush_streams() : null;
+    return { instance, out, err, flush, memoryBytes: () => memoryRef?.buffer?.byteLength ?? 0 };
   }
 
   /** Mount the sysroot (and the libc++ headers when loaded) into an instance. */
@@ -165,12 +168,13 @@ export async function createToolchain(options = {}) {
     return inputs;
   }
 
-  async function execute(state, { argv, cwd, files, unlinkExisting }) {
-    const { instance, out, err, memoryBytes } = state;
+  async function execute(state, { argv, cwd, files, mkdirs, unlinkExisting }) {
+    const { instance, out, err, memoryBytes, flush } = state;
     const FS = instance.FS;
     const dirs = state.dirs ??= new Set(["/"]);
     const inputs = mountFiles(FS, files, cwd, dirs, unlinkExisting);
     ensureDir(FS, cwd, dirs);
+    for (const dir of mkdirs) ensureDir(FS, absolute(dir, cwd), dirs);
     FS.chdir(cwd);
 
     const started = now();
@@ -185,6 +189,10 @@ export async function createToolchain(options = {}) {
         err.line(`toolchain.js: ${describeError(e)}`);
       }
     }
+    // A tool that ends through exit() (llvm-objcopy --version, for one) leaves
+    // LLVM's buffered stdout behind: the module runs no destructors. The
+    // build exports webflash_flush_streams() for exactly this.
+    try { flush?.(); } catch { /* nothing to flush */ }
     const elapsed = now() - started;
 
     const outputs = collectOutputs(FS, cwd, inputs);
@@ -212,13 +220,22 @@ export async function createToolchain(options = {}) {
     }
   }
 
-  /** One tool invocation in a fresh instance. */
-  async function run({ argv, cwd = DEFAULT_CWD, env = {}, files = new Map() } = {}) {
+  /**
+   * One tool invocation in a fresh instance.
+   *   argv    the tool name and its arguments
+   *   cwd     working directory in the instance (created; default /work)
+   *   env     environment variables
+   *   files   Map or object of path -> Uint8Array | ArrayBuffer | string | {symlink}
+   *           (relative paths are taken from cwd; parent directories are created)
+   *   dirs    directories to create before the run, for outputs whose parent
+   *           no input file creates (clang does not mkdir: -o out/a.o needs out/)
+   */
+  async function run({ argv, cwd = DEFAULT_CWD, env = {}, files = new Map(), dirs = [] } = {}) {
     checkArgs(argv);
     if (needsCxx(argv)) await loadCxx();
     const state = await instantiate(env);
     mountSysroot(state.instance.FS, (state.dirs = new Set(["/"])));
-    return execute(state, { argv, cwd: absolute(cwd, "/"), files, unlinkExisting: false });
+    return execute(state, { argv, cwd: absolute(cwd, "/"), files, mkdirs: dirs, unlinkExisting: false });
   }
 
   let reused = null;
@@ -228,7 +245,7 @@ export async function createToolchain(options = {}) {
    * run, so the instance holds only the sysroot between calls. Use only if the
    * smoke test shows it stable and faster than run().
    */
-  async function runReusing({ argv, cwd = DEFAULT_CWD, env = {}, files = new Map() } = {}) {
+  async function runReusing({ argv, cwd = DEFAULT_CWD, env = {}, files = new Map(), dirs = [] } = {}) {
     checkArgs(argv);
     if (needsCxx(argv)) await loadCxx();
     if (!reused) {
@@ -242,7 +259,7 @@ export async function createToolchain(options = {}) {
     }
     reused.out.reset();
     reused.err.reset();
-    return execute(reused, { argv, cwd: absolute(cwd, "/"), files, unlinkExisting: true });
+    return execute(reused, { argv, cwd: absolute(cwd, "/"), files, mkdirs: dirs, unlinkExisting: true });
   }
 
   /**

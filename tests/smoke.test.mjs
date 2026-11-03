@@ -1,5 +1,5 @@
-// The smoke test of SPEC section 8.5, run by `node --test tests/` against a
-// dist directory or an unpacked release:
+// The smoke test of SPEC section 8.5, run by `node --test tests/smoke.test.mjs`
+// against a dist directory or an unpacked release:
 //
 //   WEBFLASH_TOOLCHAIN_DIR   directory holding manifest.json, llvm.js, llvm.wasm.gz, sysroot.tar.gz
 //   WEBFLASH_TEST_SOURCES    output of scripts/fetch-test-sources.sh (optional: the
@@ -39,11 +39,13 @@ const LIMIT_MEMORY = 1 << 30;
 const CWD = "/work";
 
 // Klipper's CFLAGS (top-level Makefile) translated per SPEC section 9.4:
-// -flto=auto -fwhole-program -fno-use-linker-plugin -> -flto -ffat-lto-objects, -ggdb3 -> -g.
+// -flto=auto -fwhole-program -fno-use-linker-plugin -> -flto -ffat-lto-objects, -ggdb3 -> -g,
+// plus -mfloat-abi=soft: GCC's arm-none-eabi default is soft float, while clang
+// without the flag enables the FPU instructions of cortex-m4/m7/m33 (soft ABI).
 const KLIPPER_CFLAGS = [
   "-iquote", "out/", "-iquote", "src", "-iquote", "out/board-generic/", "-MD", "-Wall", "-Wtype-limits",
   "-ffunction-sections", "-fdata-sections", "-fno-delete-null-pointer-checks",
-  "-flto", "-ffat-lto-objects", "-g", "-Os",
+  "-flto", "-ffat-lto-objects", "-g", "-Os", "-mfloat-abi=soft",
 ];
 const CONLYFLAGS = ["-std=gnu11", "-Wold-style-definition", "-Wno-unknown-warning-option"];
 // src/stm32/Makefile for STM32G0B1 and src/rp2040/Makefile for RP2040.
@@ -160,7 +162,7 @@ test("clang finds its resource directory and ld.lld by itself", { skip }, async 
   // (informational: the engine passes -L and -isystem from the manifest).
   for (const cpu of ["cortex-m0plus", "cortex-m3", "cortex-m4", "cortex-m7", "cortex-m33"]) {
     const p = await tc.run({
-      argv: ["clang", "--target=arm-none-eabi", `-mcpu=${cpu}`, "-mthumb", "-###", "-c", "x.c", "-o", "x.o"],
+      argv: ["clang", "--target=arm-none-eabi", `-mcpu=${cpu}`, "-mthumb", "-mfloat-abi=soft", "-###", "-c", "x.c", "-o", "x.o"],
       cwd: CWD, files: new Map([["/work/x.c", "int x;\n"]]),
     });
     const m = /clang-runtimes\/arm-none-eabi\/([^/"]+)\/include/.exec(p.stderr);
@@ -174,10 +176,10 @@ for (const cpu of ["cortex-m0plus", "cortex-m4", "cortex-m33"]) {
     test(`compile vectors.c for ${label}`, { skip }, async () => {
       const out = `out/vectors-${cpu}${lto ? "-lto" : ""}.o`;
       const argv = [
-        "clang", "--target=arm-none-eabi", `-mcpu=${cpu}`, "-mthumb", "-Os", "-g", "-ffunction-sections", "-fdata-sections",
+        "clang", "--target=arm-none-eabi", `-mcpu=${cpu}`, "-mthumb", "-mfloat-abi=soft", "-Os", "-g", "-ffunction-sections", "-fdata-sections",
         ...(lto ? ["-flto", "-ffat-lto-objects"] : []), ...CONLYFLAGS, ...sysInc, "-c", "vectors.c", "-o", out,
       ];
-      const r = await ok(`compile vectors.c ${label}`, { argv, cwd: CWD, files: new Map([["/work/vectors.c", fixture("vectors.c")]]) });
+      const r = await ok(`compile vectors.c ${label}`, { argv, cwd: CWD, files: new Map([["/work/vectors.c", fixture("vectors.c")]]), dirs: ["out"] });
       const obj = expectOutput(r, `${CWD}/${out}`);
       assert.ok(isElf(obj) && elfMachine(obj) === 0x28, "an ARM ELF object");
       objects.set(`${cpu}:${lto}`, obj);
@@ -189,7 +191,7 @@ test("clang -E -P preprocesses Klipper's armcm_link.lds.S", { skip }, async () =
   const files = new Map([["/work/src/generic/armcm_link.lds.S", fixture("armcm_link.lds.S")], ["/work/out/autoconf.h", autoconf("stm32g0b1")]]);
   const r = await ok("preprocess armcm_link.lds.S", {
     argv: ["clang", "--target=arm-none-eabi", "-E", "-P", "-x", "assembler-with-cpp", "-Iout", "src/generic/armcm_link.lds.S", "-o", "out/src/generic/armcm_link.ld"],
-    cwd: CWD, files,
+    cwd: CWD, files, dirs: ["out/src/generic"],
   });
   const ld = new TextDecoder().decode(expectOutput(r, "/work/out/src/generic/armcm_link.ld"));
   assert.match(ld, /rom \(rx\) : ORIGIN = 0x8002000 , LENGTH = 0x20000/);
@@ -212,7 +214,7 @@ for (const lto of [false, true]) {
     // (a) the GCC-style link line of Klipper's Makefile translated per 9.4,
     //     given to clang -###, whose printed ld.lld command is then run.
     const driverArgv = [
-      "clang", "--target=arm-none-eabi", `-mcpu=${cpu}`, "-mthumb", "-nostdlib",
+      "clang", "--target=arm-none-eabi", `-mcpu=${cpu}`, "-mthumb", "-mfloat-abi=soft", "-nostdlib",
       ...(lto ? ["-flto", "-ffat-lto-objects"] : []),
       "out/vectors.o", "-T", "out/armcm_link.ld", "-Wl,--gc-sections", "-Wl,--print-memory-usage",
       `-L${lib}`, "-lc", "-lclang_rt.builtins", "-lc", "-Wl,-u,VectorTable", "-o", "out/a.elf",
@@ -264,7 +266,8 @@ for (const lto of [false, true]) {
     assert.match(size.stdout, /text\s+data\s+bss/);
     const readelf = await ok(`llvm-readelf ${label}`, { argv: ["llvm-readelf", "-h", "-S", "out/a.elf"], cwd: CWD, files: elfFiles });
     assert.match(readelf.stdout, /Machine:\s+ARM/);
-    assert.match(readelf.stdout, /\.vector_table/);
+    // Klipper's script folds .vector_table into .text at the application address.
+    assert.match(readelf.stdout, new RegExp(String.raw`\.text\s+PROGBITS\s+0*${config.CONFIG_FLASH_APPLICATION_ADDRESS.toString(16)}\b`));
     const objdump = await ok(`llvm-objdump ${label}`, { argv: ["llvm-objdump", "-d", "out/a.elf"], cwd: CWD, files: elfFiles });
     assert.match(objdump.stdout, /<ResetHandler>:/);
     const stripped = expectOutput(await ok(`llvm-strip ${label}`, { argv: ["llvm-strip", "out/a.elf", "-o", "out/a.stripped.elf"], cwd: CWD, files: elfFiles }), "/work/out/a.stripped.elf");
@@ -314,14 +317,14 @@ test("rp2040 stage2: boot2_w25q080.S through boot_stage2.ld, pad_checksum, and a
   // A whole image: the stage2 plus a vector-table program through rpxxxx_link.lds.S.
   const ldr = await ok("rp2040: preprocess rpxxxx_link.lds.S", {
     argv: ["clang", "--target=arm-none-eabi", "-E", "-P", "-x", "assembler-with-cpp", "-Iout", "src/rp2040/rpxxxx_link.lds.S", "-o", "out/src/rp2040/rpxxxx_link.ld"],
-    cwd: CWD, files,
+    cwd: CWD, files, dirs: ["out/src/rp2040"],
   });
   files.set("/work/out/src/rp2040/rpxxxx_link.ld", expectOutput(ldr, "/work/out/src/rp2040/rpxxxx_link.ld"));
   const vo = await ok("rp2040: compile vectors.c", { argv: [...cflags, ...CONLYFLAGS, "-c", "vectors.c", "-o", "out/vectors.o"], cwd: CWD, files });
   files.set("/work/out/vectors.o", expectOutput(vo, "/work/out/vectors.o"));
   const { lib } = libDirFor("cortex-m0plus");
   const link = await tc.runLinkViaDriver({
-    argv: ["clang", "--target=arm-none-eabi", "-mcpu=cortex-m0plus", "-mthumb", "-nostdlib", "-flto", "-ffat-lto-objects",
+    argv: ["clang", "--target=arm-none-eabi", "-mcpu=cortex-m0plus", "-mthumb", "-mfloat-abi=soft", "-nostdlib", "-flto", "-ffat-lto-objects",
       "out/vectors.o", "out/stage2.o", "-T", "out/src/rp2040/rpxxxx_link.ld", "-Wl,--gc-sections", "-Wl,--print-memory-usage",
       `-L${lib}`, "-lc", "-lclang_rt.builtins", "-lc", "-Wl,-u,VectorTable", "-o", "out/klipper.elf"],
     cwd: CWD, files,
@@ -350,7 +353,7 @@ test("real Klipper files for stm32g0b1 compile within the limits", { skip: skip 
     const obj = `out/${src.replace(/\.c$/, ".o")}`;
     const r = await ok(`klipper: ${src}`, {
       argv: ["clang", "--target=arm-none-eabi", ...KLIPPER_CFLAGS, ...STM32G0_FLAGS, ...CONLYFLAGS, ...sysInc, "-c", src, "-o", obj],
-      cwd: CWD, files,
+      cwd: CWD, files, dirs: [obj.slice(0, obj.lastIndexOf("/"))],
     });
     const o = expectOutput(r, `/work/${obj}`);
     assert.ok(isElf(o), `${obj} is an ELF object`);
@@ -370,22 +373,22 @@ test("clang++ compiles with the libc++ headers", { skip }, async () => {
   const source = "#include <optional>\n#include <cmath>\n#include <cstdint>\n#include <numbers>\n"
     + "extern \"C\" int probe(float x) { std::optional<float> v = x; return v ? (int)(std::sqrt(*v) * std::numbers::pi) : 0; }\n";
   const r = await ok("clang++ with <optional>", {
-    argv: ["clang++", "--target=arm-none-eabi", "-mcpu=cortex-m4", "-mthumb", "-Os", "-std=c++20", "-fno-rtti", "-fno-exceptions",
+    argv: ["clang++", "--target=arm-none-eabi", "-mcpu=cortex-m4", "-mthumb", "-mfloat-abi=soft", "-Os", "-std=c++20", "-fno-rtti", "-fno-exceptions",
       "-ffunction-sections", "-fdata-sections", ...sysIncCxx, ...sysInc, "-c", "probe.c++", "-o", "out/probe.o"],
-    cwd: CWD, files: new Map([["/work/probe.c++", source]]),
+    cwd: CWD, files: new Map([["/work/probe.c++", source]]), dirs: ["out"],
   });
   assert.ok(isElf(expectOutput(r, "/work/out/probe.o")));
 });
 
 test("100 consecutive compiles on one instance versus fresh instances", { skip }, async () => {
   const files = new Map([["/work/vectors.c", fixture("vectors.c")]]);
-  const argvFor = (cpu) => ["clang", "--target=arm-none-eabi", `-mcpu=${cpu}`, "-mthumb", "-Os", "-g", "-ffunction-sections", "-fdata-sections", "-flto", "-ffat-lto-objects", ...CONLYFLAGS, ...sysInc, "-c", "vectors.c", "-o", "out/v.o"];
+  const argvFor = (cpu) => ["clang", "--target=arm-none-eabi", `-mcpu=${cpu}`, "-mthumb", "-mfloat-abi=soft", "-Os", "-g", "-ffunction-sections", "-fdata-sections", "-flto", "-ffat-lto-objects", ...CONLYFLAGS, ...sysInc, "-c", "vectors.c", "-o", "out/v.o"];
   const cpus = ["cortex-m0plus", "cortex-m4", "cortex-m33"];
   const reference = {};
   const freshTimes = [];
   for (let i = 0; i < 12; i++) {
     const cpu = cpus[i % 3];
-    const r = await tc.run({ argv: argvFor(cpu), cwd: CWD, files });
+    const r = await tc.run({ argv: argvFor(cpu), cwd: CWD, files, dirs: ["out"] });
     assert.equal(r.code, 0, r.stderr);
     freshTimes.push(r.time);
     reference[cpu] ??= r.outputs.get("/work/out/v.o");
@@ -397,7 +400,7 @@ test("100 consecutive compiles on one instance versus fresh instances", { skip }
   for (let i = 0; i < 100; i++) {
     const cpu = cpus[i % 3];
     try {
-      const r = await tc.runReusing({ argv: argvFor(cpu), cwd: CWD, files });
+      const r = await tc.runReusing({ argv: argvFor(cpu), cwd: CWD, files, dirs: ["out"] });
       reuseTimes.push(r.time);
       memory = Math.max(memory, r.memory);
       if (r.code !== 0) failures++;
