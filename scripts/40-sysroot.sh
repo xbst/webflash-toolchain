@@ -11,7 +11,7 @@
 # driver finds everything by itself when run as /sysroot/bin/<tool>):
 #   sysroot/bin/<tool>                             empty executable placeholders
 #   sysroot/lib/clang/<major>/include/             clang resource headers
-#   sysroot/lib/clang-runtimes/multilib.yaml       ATfE's variant selection table
+#   sysroot/lib/clang-runtimes/multilib.yaml       ATfE's variant selection table, minus IncludeDirs
 #   sysroot/lib/clang-runtimes/arm-none-eabi/include/        picolibc headers
 #   sysroot/lib/clang-runtimes/arm-none-eabi/<variant>/lib/  libc.a, libm.a, libclang_rt.builtins.a
 source "$(dirname "$0")/common.sh"
@@ -69,7 +69,9 @@ for tool in llvm $TOOLS; do
   chmod 755 "$S/bin/$tool"
 done
 cp -r "$DIST/clang-headers" "$S/lib/clang/$LLVM_MAJOR/include"
-cp "$X/lib/clang-runtimes/multilib.yaml" "$S/lib/clang-runtimes/multilib.yaml"
+# ATfE's file carries IncludeDirs keys that clang 23 rejects (and with them the
+# whole file); multilib_yaml.py drops those blocks and keeps the rest verbatim.
+python3 "$REPO/scripts/multilib_yaml.py" "$X/lib/clang-runtimes/multilib.yaml" "$S/lib/clang-runtimes/multilib.yaml"
 cp -r "$X/$RUNTIMES/include" "$S/lib/clang-runtimes/$SYSROOT_TARGET/include"
 rm -rf "$S/lib/clang-runtimes/$SYSROOT_TARGET/include/c++"
 for variant in $MULTILIB_DIRS; do
