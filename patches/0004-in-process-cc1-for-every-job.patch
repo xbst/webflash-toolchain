@@ -1,0 +1,18 @@
+diff --git a/clang/lib/Driver/Driver.cpp b/clang/lib/Driver/Driver.cpp
+index e606cdc..6df976c 100644
+--- a/clang/lib/Driver/Driver.cpp
++++ b/clang/lib/Driver/Driver.cpp
+@@ -5560,7 +5560,13 @@ void Driver::BuildJobs(Compilation &C) const {
+ 
+   // If we have more than one job, then disable integrated-cc1 for now. Do this
+   // also when we need to report process execution statistics.
++#if defined(__EMSCRIPTEN__)
++  // WebFlash: there is no process to spawn, so every cc1 and cc1as job stays
++  // in this process and runs in order (a .S file needs two: -E, then -cc1as).
++  if (CCPrintProcessStats)
++#else
+   if (C.getJobs().size() > 1 || CCPrintProcessStats)
++#endif
+     for (auto &J : C.getJobs())
+       J.InProcess = false;
+ 

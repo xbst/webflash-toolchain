@@ -29,7 +29,7 @@ The WebFlash Pages deploy downloads `toolchain.tar`, reads `manifest.json` from 
 | Arm Toolchain for Embedded | `release-23.1.0-ATfE` (`ATfE-23.1.0-Linux-x86_64.tar.xz`, sha256 pinned) | `versions.toml` |
 | Build number | `[build].number`, overridden by a pushed `build-<n>` tag | `versions.toml`, the workflow |
 
-Two patches are applied to LLVM. `patches/0001-main-executable-under-emscripten.patch`: under Emscripten `getMainExecutable()` trusts `argv[0]` when it names an existing file, so that clang run as `/sysroot/bin/llvm` finds its resource directory (`/sysroot/lib/clang/23`), `ld.lld` and the `multilib.yaml` of the sysroot by itself. `patches/0002-driver-tool-symlinks.patch`: in a multicall driver build, `llvm_add_tool_symlink` must not evaluate `$<TARGET_FILE>` of a tool that became a custom target (the aliases such as `llvm-strip` and `llvm-readelf` are generated against the driver anyway); without it CMake's generate step fails for llvm-ar, llvm-objcopy, llvm-objdump and llvm-readobj. The driver holds exactly the ten tools of the manifest; the other tools that would join it (`dsymutil`, `llvm-symbolizer`, `llvm-rc` and so on) are switched off with their `LLVM_TOOL_<NAME>_BUILD` options.
+Five patches are applied to LLVM; the ones that touch code are guarded by `__EMSCRIPTEN__`. `patches/0001-main-executable-under-emscripten.patch`: under Emscripten `getMainExecutable()` trusts `argv[0]` when it names an existing file, so that clang run as `/sysroot/bin/llvm` finds its resource directory (`/sysroot/lib/clang/23`), `ld.lld` and the `multilib.yaml` of the sysroot by itself. `patches/0002-driver-tool-symlinks.patch`: in a multicall driver build, `llvm_add_tool_symlink` must not evaluate `$<TARGET_FILE>` of a tool that became a custom target (the aliases such as `llvm-strip` and `llvm-readelf` are generated against the driver anyway); without it CMake's generate step fails for llvm-ar, llvm-objcopy, llvm-objdump and llvm-readobj. `patches/0003-flush-streams-under-emscripten.patch`: the driver exports `webflash_flush_streams()`, which `toolchain.js` calls after every `main()`; the module runs with `EXIT_RUNTIME=0`, so a tool that ends through `exit()` (`llvm-objcopy --version` does) would otherwise leave its output in the buffer of `llvm::outs()`. `patches/0004-in-process-cc1-for-every-job.patch`: clang's driver keeps every cc1 and cc1as job in process even when a compilation has several (a `.S` file is preprocessed, then assembled), where upstream falls back to spawning, which WebAssembly cannot do. `patches/0005-no-signal-handlers-under-emscripten.patch`: `InitLLVM` registers no signal callbacks; there are no signals, and LLVM's table of eight entries, two per `main()`, limited a reused instance to four runs. The driver holds exactly the ten tools of the manifest; the other tools that would join it (`dsymutil`, `llvm-symbolizer`, `llvm-rc` and so on) are switched off with their `LLVM_TOOL_<NAME>_BUILD` options.
 
 ## The sysroot and the multilib map
 
@@ -38,12 +38,16 @@ The sysroot mirrors an ATfE installation under `/sysroot` in the instance's MEMF
 ```
 /sysroot/bin/<tool>                                  empty executable placeholders (argv[0] targets)
 /sysroot/lib/clang/23/include/                       clang resource headers (core + Arm)
-/sysroot/lib/clang-runtimes/multilib.yaml            ATfE's variant selection table, verbatim
+/sysroot/lib/clang-runtimes/multilib.yaml            ATfE's variant selection table, minus its IncludeDirs keys
 /sysroot/lib/clang-runtimes/arm-none-eabi/include/   picolibc headers (shared by all variants)
 /sysroot/lib/clang-runtimes/arm-none-eabi/<variant>/lib/{libc.a,libm.a,libclang_rt.builtins.a}
 ```
 
 Klipper builds every Cortex-M as soft float without FPU flags (`-mcpu=X -mthumb`), so only the `soft_nofp` variants are shipped. ATfE 23 has no `armv7em` library: Cortex-M4 and Cortex-M7 use the `armv7m` one (v7E-M is a superset of v7-M, and ATfE's own `multilib.yaml` maps `thumbv7em` to `thumbv7m`). The `unaligned` variants are what clang selects for v7-M and v8-M Mainline, whose default is `-munaligned-access`; v6-M has no unaligned access.
+
+Always pass `-mfloat-abi=soft` to clang. GCC's `arm-none-eabi` default is soft float, but clang without the flag enables the FPU instructions of Cortex-M4, M7 and M33 with the soft calling convention (`-###` shows `+vfp4d16sp`), and Klipper never turns the FPU on. With the flag, clang's own variant choice is the `soft_nofp` family too (its `exn_rtti` sibling, since a C compile says nothing about exceptions; the engine passes `-L` from the manifest, so the choice only shows in `-###` output).
+
+ATfE's `multilib.yaml` carries an `IncludeDirs` key per variant that clang 23.1.4 does not know; it would reject the whole file and fail every compile. `scripts/multilib_yaml.py` drops those blocks and keeps the rest verbatim; clang adds the `<variant>/include` directory on its own.
 
 | `-mcpu` | manifest `multilibs` key | library directory |
 |---|---|---|
@@ -57,18 +61,18 @@ Klipper builds every Cortex-M as soft float without FPU flags (`-mcpu=X -mthumb`
 
 `toolchain.js` runs one tool per call: `argv[0]` is the tool name, the remaining arguments are passed through unchanged, relative paths resolve against `cwd`. The engine translates GCC command lines per SPEC section 9.4; these are the shapes this toolchain expects and the smoke test exercises.
 
-Compile (Klipper's `CFLAGS` with `-flto=auto -fwhole-program -fno-use-linker-plugin -ggdb3` translated to `-flto -ffat-lto-objects -g`):
+Compile (Klipper's `CFLAGS` with `-flto=auto -fwhole-program -fno-use-linker-plugin -ggdb3` translated to `-flto -ffat-lto-objects -g`, plus `-mfloat-abi=soft`):
 
 ```
 clang --target=arm-none-eabi -iquote out/ -iquote src -iquote out/board-generic/ -MD -Wall -Wtype-limits
-      -ffunction-sections -fdata-sections -fno-delete-null-pointer-checks -flto -ffat-lto-objects -g -Os
+      -ffunction-sections -fdata-sections -fno-delete-null-pointer-checks -flto -ffat-lto-objects -g -Os -mfloat-abi=soft
       -mcpu=cortex-m0plus -Ilib/stm32g0/include -DSTM32G0B1xx -mthumb -Ilib/cmsis-core -Ilib/fast-hash
       -std=gnu11 -Wold-style-definition -Wno-unknown-warning-option
       -isystem /sysroot/lib/clang/23/include -isystem /sysroot/lib/clang-runtimes/arm-none-eabi/include
       -c src/sched.c -o out/src/sched.o
 ```
 
-`clang -c` runs cc1 in process (the build has `CLANG_SPAWN_CC1` off and `-fintegrated-cc1` is the default). `-MD` writes `out/src/sched.d` next to the object, which comes back as an output. `clang++` with `-std=c++20 -fno-rtti -fno-exceptions` works the same way for Kalico's `.c++` files, with `include_cxx` in front of `include`.
+`clang -c` runs cc1 in process (the build has `CLANG_SPAWN_CC1` off and `-fintegrated-cc1` is the default); a `.S` file takes two jobs, the preprocessor and then cc1as, which patch 0004 keeps in process as well. The tools create no directories: the parent of every output must exist, either because an input lives there or through the `dirs` option of `run()`. `-MD` writes `out/src/sched.d` next to the object, which comes back as an output. `clang++` with `-std=c++20 -fno-rtti -fno-exceptions` works the same way for Kalico's `.c++` files, with `include_cxx` in front of `include`.
 
 Preprocess a linker script (`cpp -I<out> -P -MD -MT x x.lds.S -o x.ld`):
 
@@ -79,7 +83,7 @@ clang --target=arm-none-eabi -E -P -x assembler-with-cpp -Iout src/generic/armcm
 Link, option (a): give clang the translated GCC link line with `-###`; clang prints the commands it would run on stderr; the last fully quoted line is the `ld.lld` command. Run that. There is no second process: `clang` cannot spawn `ld.lld` under WebAssembly, so a plain `clang ... -o klipper.elf` link fails with "unable to execute command".
 
 ```
-clang --target=arm-none-eabi -mcpu=cortex-m0plus -mthumb -nostdlib -flto -ffat-lto-objects -###
+clang --target=arm-none-eabi -mcpu=cortex-m0plus -mthumb -mfloat-abi=soft -nostdlib -flto -ffat-lto-objects -###
       out/src/sched.o ... out/compile_time_request.o -T out/src/generic/armcm_link.ld
       -Wl,--gc-sections -Wl,--print-memory-usage
       -L/sysroot/lib/clang-runtimes/arm-none-eabi/armv6m_soft_nofp_size/lib -lc -lclang_rt.builtins -lc
@@ -112,13 +116,14 @@ import { createToolchain } from "./toolchain.js";
 
 const tc = await createToolchain({ manifestUrl: "https://webflash.isiks.tech/toolchain/<id>/manifest.json" });
 const r = await tc.run({
-  argv: ["clang", "--target=arm-none-eabi", "-mcpu=cortex-m0plus", "-mthumb", "-Os", "-c", "src/a.c", "-o", "out/a.o"],
+  argv: ["clang", "--target=arm-none-eabi", "-mcpu=cortex-m0plus", "-mthumb", "-mfloat-abi=soft", "-Os", "-c", "src/a.c", "-o", "out/a.o"],
   cwd: "/work",
   env: {},
   files: new Map([
     ["/work/src/a.c", bytes],                         // Uint8Array, ArrayBuffer or string
     ["/work/out/board", { symlink: "/work/src/stm32" }],
   ]),
+  dirs: ["out"],                                      // created before the run: -o out/a.o needs out/ to exist
 });
 r.code      // the tool's exit status (134 when the instance aborted; the reason is in stderr)
 r.stdout    // text
@@ -128,7 +133,7 @@ r.time      // milliseconds spent in main()
 r.memory    // bytes of linear memory the instance ended with
 ```
 
-`createToolchain` fetches `manifest.json`, imports `llvm.js`, decompresses `llvm.wasm.gz` (`DecompressionStream("gzip")`, or the bundled inflate where that API is missing) and compiles it once, and parses `sysroot.tar.gz`. Every `run()` instantiates the compiled module afresh, mounts the sysroot and the given files into the instance's MEMFS without copying (inputs are read-only views of your arrays; a tool cannot change an input in place), changes to `cwd`, calls `main()` and reads back every file under `cwd` that did not exist before. `runReusing()` keeps one instance alive between calls for measurement; the smoke test reports whether it is stable and faster. `loadCxx()` fetches the libc++ headers early (otherwise the first `clang++` run does). Options: `fetch` (a fetch-compatible function; `file:` URLs are read from disk under Node without one), `importModule`, `verify` (check every sha256), `onProgress({file, loaded, total})`.
+`createToolchain` fetches `manifest.json`, imports `llvm.js`, decompresses `llvm.wasm.gz` (`DecompressionStream("gzip")`, or the bundled inflate where that API is missing) and compiles it once, and parses `sysroot.tar.gz`. Every `run()` instantiates the compiled module afresh, mounts the sysroot and the given files into the instance's MEMFS without copying (inputs are read-only views of your arrays; a tool cannot change an input in place), changes to `cwd`, calls `main()` and reads back every file under `cwd` that did not exist before. Relative `files` keys and `dirs` entries are taken from `cwd`; parent directories of `files` are created, nothing else is. `runReusing()` keeps one instance alive between calls, which saves the instantiation and sysroot mount of every run (about 60 ms here against 20 ms for the compile of a small file); the smoke test reports whether it is stable and faster, and the engine should use `run()` unless the report of the release it loads says so. `loadCxx()` fetches the libc++ headers early (otherwise the first `clang++` run does). Options: `fetch` (a fetch-compatible function; `file:` URLs are read from disk under Node without one), `importModule`, `verify` (check every sha256), `onProgress({file, loaded, total})`.
 
 `llvm.js` is an ES module: in a browser load `toolchain.js` from a module worker (`new Worker(url, { type: "module" })`); under Node import it from a directory without a `package.json` that says `commonjs`. There are no threads: parallelism comes from several workers, each with its own `createToolchain()`.
 

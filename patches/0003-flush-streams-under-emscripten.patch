@@ -1,0 +1,22 @@
+diff --git a/llvm/tools/llvm-driver/llvm-driver.cpp b/llvm/tools/llvm-driver/llvm-driver.cpp
+index 14ce162..3910201 100644
+--- a/llvm/tools/llvm-driver/llvm-driver.cpp
++++ b/llvm/tools/llvm-driver/llvm-driver.cpp
+@@ -84,3 +84,17 @@ int main(int Argc, char **Argv) {
+   llvm::InitLLVM X(Argc, Argv);
+   return findTool(Argc, Argv, Argv[0]);
+ }
++
++#if defined(__EMSCRIPTEN__)
++#include "llvm/Support/raw_ostream.h"
++#include <emscripten.h>
++
++// WebFlash: the module is linked with EXIT_RUNTIME=0, so a tool that ends
++// through exit() (llvm-objcopy --version prints and then calls exit(0)) runs
++// no destructor and leaves its output in the buffer of llvm::outs(). The JS
++// side calls this after every main() to get those bytes.
++extern "C" EMSCRIPTEN_KEEPALIVE void webflash_flush_streams(void) {
++  llvm::outs().flush();
++  llvm::errs().flush();
++}
++#endif

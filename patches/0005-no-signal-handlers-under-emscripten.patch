@@ -1,0 +1,25 @@
+--- a/llvm/lib/Support/InitLLVM.cpp
++++ b/llvm/lib/Support/InitLLVM.cpp
+@@ -82,7 +82,11 @@
+ #endif
+ 
+   // Bring stdin/stdout/stderr into a known state.
+-#ifdef _WIN32
++#if defined(__EMSCRIPTEN__)
++  // WebFlash: WebAssembly has no signals, and main() runs many times in one
++  // instance; the callback table holds eight entries, two per InitLLVM, so
++  // registering would stop the fifth run. The destructor still flushes.
++#elif defined(_WIN32)
+   sys::AddSignalHandler(CleanupStdHandles, nullptr);
+ #else
+   sys::AddSignalHandler(CleanupStdHandles, nullptr,
+@@ -99,7 +103,9 @@
+   // Initialize the stack printer after installing the one-shot pipe signal
+   // handler, so we can perform a sigaction() for SIGPIPE on Unix if requested.
+   StackPrinter.emplace(Argc, Argv);
++#if !defined(__EMSCRIPTEN__)
+   sys::PrintStackTraceOnErrorSignal(Argv[0]);
++#endif
+   install_out_of_memory_new_handler();
+   RaiseLimits();
+ 
