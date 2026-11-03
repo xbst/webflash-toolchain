@@ -255,18 +255,7 @@ jobs:
           cd build/package
           cp "toolchain-$ID.tar" toolchain.tar
           tar -xOf toolchain.tar manifest.json > manifest.json
-          {
-            echo "WebFlash toolchain \`$ID\`: clang, lld and the LLVM binutils built to WebAssembly with the ARM backend, plus a picolibc sysroot."
-            echo
-            echo "| Pin | Version |"
-            echo "|---|---|"
-            python3 -c 'import json; m = json.load(open("manifest.json")); print(f"| LLVM | {m[\"llvm\"]} |\n| Arm Toolchain for Embedded | {m[\"atfe\"]} |\n| Emscripten | {m[\"emscripten\"]} |")'
-            echo
-            echo "| File | Bytes |"
-            echo "|---|---|"
-            python3 -c 'import json; m = json.load(open("manifest.json")); [print(f"| {k} | {v[\"size\"]} |") for k, v in m["files"].items()]'
-            echo
-            echo "Smoke test report: see the \`smoke-report\` artifact of the workflow run."
-          } > notes.md
+          python3 "$GITHUB_WORKSPACE/scripts/release_notes.py" manifest.json "$GITHUB_WORKSPACE/build/smoke-report.json" > notes.md
+          cat notes.md
           gh release create "$ID" --repo "$GITHUB_REPOSITORY" --title "$ID" --notes-file notes.md --latest \
             "toolchain-$ID.tar" "toolchain.tar"
