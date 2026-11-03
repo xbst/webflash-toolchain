@@ -107,7 +107,20 @@ The RP2040 stage2 path of `src/rp2040/Makefile` maps one to one: `clang <CFLAGS>
 
 Other binutils: `llvm-objcopy -O binary|ihex in out`, `llvm-objcopy -j .compile_time_request -O binary in out`, `llvm-nm`, `llvm-size`, `llvm-readelf -h -S`, `llvm-objdump -d`, `llvm-strip in -o out`, `llvm-ar rcs lib.a objs...` take the GNU arguments unchanged.
 
-What lld accepts in Klipper's linker scripts: the smoke test links `src/generic/armcm_link.lds.S` (`OUTPUT_FORMAT` with three arguments, `MEMORY`, `AT`, `NOLOAD`, `KEEP`, `/DISCARD/`), `src/rp2040/rpxxxx_link.lds.S` (`PHDRS` with `FLAGS`, `LONG`) and pico-sdk's `boot_stage2.ld` unchanged, and checks the resulting images. Any construct that needs a workaround will be listed here after the first run; none is expected.
+What lld accepts in Klipper's linker scripts: the smoke test links `src/generic/armcm_link.lds.S` (`OUTPUT_FORMAT` with three arguments, `MEMORY`, `AT`, `NOLOAD`, `KEEP`, `/DISCARD/`), `src/rp2040/rpxxxx_link.lds.S` (`PHDRS` with `FLAGS`, `LONG`) and pico-sdk's `boot_stage2.ld` unchanged, and checks the resulting images. The release run of build 1 needed no workaround for any of them. Note that `armcm_link.lds.S` places the vector table inside the `.text` output section, so `llvm-readelf -S` shows no `.vector_table` section in the linked image.
+
+For the record, this is the line clang 23.1.4 printed for the smoke test's LTO link of option (a) (the `-L` directories of the variant clang selected by itself do not exist in the sysroot and are harmless; the manifest's `-L` comes first and wins):
+
+```
+ld.lld -Bstatic -m armelf -EL -L/sysroot/lib/clang-runtimes/arm-none-eabi/armv6m_soft_nofp_size/lib
+       -L/sysroot/bin/../lib/clang-runtimes/arm-none-eabi/armv6m_soft_nofp_exn_rtti_size
+       -L/sysroot/bin/../lib/clang-runtimes/arm-none-eabi/armv6m_soft_nofp_exn_rtti_size/lib -T out/armcm_link.ld
+       -L/sysroot/lib/clang/23/lib/arm-unknown-none-eabi/arm-none-eabi/armv6m_soft_nofp_exn_rtti_size
+       -L/sysroot/lib/clang/23/lib/arm-unknown-none-eabi
+       -L/sysroot/bin/../lib/clang-runtimes/arm-none-eabi/armv6m_soft_nofp_exn_rtti_size/lib
+       --fat-lto-objects -plugin-opt=mcpu=cortex-m0plus out/vectors.o --gc-sections --print-memory-usage
+       -lc -lclang_rt.builtins -lc -u VectorTable --target2=rel -o out/a.elf
+```
 
 ## Using toolchain.js
 
@@ -133,7 +146,7 @@ r.time      // milliseconds spent in main()
 r.memory    // bytes of linear memory the instance ended with
 ```
 
-`createToolchain` fetches `manifest.json`, imports `llvm.js`, decompresses `llvm.wasm.gz` (`DecompressionStream("gzip")`, or the bundled inflate where that API is missing) and compiles it once, and parses `sysroot.tar.gz`. Every `run()` instantiates the compiled module afresh, mounts the sysroot and the given files into the instance's MEMFS without copying (inputs are read-only views of your arrays; a tool cannot change an input in place), changes to `cwd`, calls `main()` and reads back every file under `cwd` that did not exist before. Relative `files` keys and `dirs` entries are taken from `cwd`; parent directories of `files` are created, nothing else is. `runReusing()` keeps one instance alive between calls, which saves the instantiation and sysroot mount of every run (about 60 ms here against 20 ms for the compile of a small file); the smoke test reports whether it is stable and faster, and the engine should use `run()` unless the report of the release it loads says so. `loadCxx()` fetches the libc++ headers early (otherwise the first `clang++` run does). Options: `fetch` (a fetch-compatible function; `file:` URLs are read from disk under Node without one), `importModule`, `verify` (check every sha256), `onProgress({file, loaded, total})`.
+`createToolchain` fetches `manifest.json`, imports `llvm.js`, decompresses `llvm.wasm.gz` (`DecompressionStream("gzip")`, or the bundled inflate where that API is missing) and compiles it once, and parses `sysroot.tar.gz`. Every `run()` instantiates the compiled module afresh, mounts the sysroot and the given files into the instance's MEMFS without copying (inputs are read-only views of your arrays; a tool cannot change an input in place), changes to `cwd`, calls `main()` and reads back every file under `cwd` that did not exist before. Relative `files` keys and `dirs` entries are taken from `cwd`; parent directories of `files` are created, nothing else is. `runReusing()` keeps one instance alive between calls, which saves the instantiation and sysroot mount of every run. In the release run of build 1 one instance compiled 100 files in a row with no failure and byte-identical outputs, at 40 ms per compile against 56 ms with a fresh instance, while its memory grew from 64 MB to 191 MB (cc1 runs with `-disable-free`, so every compile leaks a little); `dispose()` drops the instance. `run()` stays the default for its isolation; `runReusing()` is a measured option for long builds, worth a `dispose()` after each one. `loadCxx()` fetches the libc++ headers early (otherwise the first `clang++` run does). Options: `fetch` (a fetch-compatible function; `file:` URLs are read from disk under Node without one), `importModule`, `verify` (check every sha256), `onProgress({file, loaded, total})`.
 
 `llvm.js` is an ES module: in a browser load `toolchain.js` from a module worker (`new Worker(url, { type: "module" })`); under Node import it from a directory without a `package.json` that says `commonjs`. There are no threads: parallelism comes from several workers, each with its own `createToolchain()`.
 
@@ -161,17 +174,17 @@ Push a tag `build-<n>` (or run the workflow by hand; `[build].number` of `versio
 
 ## Smoke test numbers
 
-Measured by `tests/smoke.test.mjs` under Node on the `ubuntu-24.04` runner, from the `smoke-report` artifact of the release run. Filled in after the first release.
+Measured by `tests/smoke.test.mjs` under Node 24.22.1 on the `ubuntu-24.04` runner (2 vCPUs) in the release run of build 1 on 2026-11-03, from its `smoke-report` artifact. Times are `main()` only; a fresh instance adds its instantiation and sysroot mount, which the last row measures. The first compile in a process pays about 1 s more for Node's lazy compilation of the module; the table shows later runs.
 
 | Measurement | Value |
 |---|---|
-| `llvm.wasm.gz` | pending |
-| `sysroot.tar.gz` | pending |
-| Klipper `src/sched.c` (stm32g0b1, LTO, fat objects) | pending |
-| Klipper `src/stm32/stm32g0.c` | pending |
-| Link of the vector-table program with LTO | pending |
-| Peak instance memory | pending |
-| Fresh instance per compile versus a reused instance (average) | pending |
+| `llvm.wasm.gz` | 21,103,163 bytes (59,603,584 uncompressed) |
+| `sysroot.tar.gz` | 1,475,624 bytes, 238 entries (`sysroot-cxx.tar.gz`: 1,731,714 bytes, 1,786 entries) |
+| Klipper `src/sched.c` (stm32g0b1, LTO, fat objects) | 435 ms (`src/command.c`, the slowest: 553 ms; limit 3,000 ms) |
+| Klipper `src/stm32/stm32g0.c` | 278 ms (`src/generic/armcm_boot.c`: 192 ms) |
+| Link of the vector-table program with LTO | 44 ms with the direct `ld.lld` line, 149 ms with the line taken from `clang -###` (11 ms and 75 ms without LTO) |
+| Peak instance memory | 64 MB for every single-run instance; 191 MB after 100 compiles on one reused instance (limit 1,024 MB) |
+| Fresh instance per compile versus a reused instance (average) | 56 ms against 40 ms per compile of the vector-table file with LTO over three CPUs; 100 reused runs, 0 failures, 0 output differences |
 
 ## License
 
