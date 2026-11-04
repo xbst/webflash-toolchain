@@ -1,10 +1,9 @@
 # webflash-toolchain
 
-The compiler of [WebFlash](https://github.com/xbst/webflash): clang, lld and the LLVM binutils built to WebAssembly with the ARM backend, plus a picolibc sysroot for Cortex-M, so that Klipper, Kalico and Katapult firmware can be compiled in the browser. No server, no virtual machine: one `llvm.wasm` module runs `clang`, `clang++`, `ld.lld`, `llvm-objcopy`, `llvm-objdump`, `llvm-readelf`, `llvm-ar`, `llvm-nm`, `llvm-strip` and `llvm-size`, dispatching on `argv[0]`.
+The compiler of [WebFlash](https://github.com/xbst/webflash): clang, lld and the LLVM binutils built to WebAssembly with the ARM backend, plus a picolibc sysroot for Cortex-M, so that Klipper, Kalico and Katapult firmware can be compiled in the browser.
 
-Status: the first release is pending the first GitHub Actions run (the build takes hours and only runs there). The numbers and the lld notes below are filled in from the smoke test report of that run.
-
-## What a release contains
+<details>
+<summary>What a release contains</summary>
 
 Every release `llvm<ver>-atfe<ver>-build<n>` carries `toolchain-<id>.tar` and the same file as `toolchain.tar` (the stable name `releases/latest/download/toolchain.tar`). The tar is flat:
 
@@ -19,8 +18,10 @@ Every release `llvm<ver>-atfe<ver>-build<n>` carries `toolchain-<id>.tar` and th
 | `licenses/` | LLVM, Clang, LLD, compiler-rt, libc++, picolibc, ATfE, Emscripten and this repository's licenses, as listed in `manifest.licenses` |
 
 The WebFlash Pages deploy downloads `toolchain.tar`, reads `manifest.json` from it (`tar -xOf toolchain.tar manifest.json`), unpacks it into `_site/toolchain/<id>/` and writes `toolchain/current.json`. The site's toolchain workers then load `toolchain/<id>/manifest.json` with `toolchain.js`.
+</details>
 
-## Pins
+<details>
+<summary>Pins</summary>
 
 | What | Pinned | Where |
 |---|---|---|
@@ -30,8 +31,10 @@ The WebFlash Pages deploy downloads `toolchain.tar`, reads `manifest.json` from 
 | Build number | `[build].number`, overridden by a pushed `build-<n>` tag | `versions.toml`, the workflow |
 
 Six patches are applied to LLVM; the ones that touch code are guarded by `__EMSCRIPTEN__`. `patches/0001-main-executable-under-emscripten.patch`: under Emscripten `getMainExecutable()` trusts `argv[0]` when it names an existing file, so that clang run as `/sysroot/bin/llvm` finds its resource directory (`/sysroot/lib/clang/23`), `ld.lld` and the `multilib.yaml` of the sysroot by itself. `patches/0002-driver-tool-symlinks.patch`: in a multicall driver build, `llvm_add_tool_symlink` must not evaluate `$<TARGET_FILE>` of a tool that became a custom target (the aliases such as `llvm-strip` and `llvm-readelf` are generated against the driver anyway); without it CMake's generate step fails for llvm-ar, llvm-objcopy, llvm-objdump and llvm-readobj. `patches/0003-flush-streams-under-emscripten.patch`: the driver exports `webflash_flush_streams()`, which `toolchain.js` calls after every `main()`; the module runs with `EXIT_RUNTIME=0`, so a tool that ends through `exit()` (`llvm-objcopy --version` does) would otherwise leave its output in the buffer of `llvm::outs()`. `patches/0004-in-process-cc1-for-every-job.patch`: clang's driver keeps every cc1 and cc1as job in process even when a compilation has several (a `.S` file is preprocessed, then assembled), where upstream falls back to spawning, which WebAssembly cannot do. `patches/0005-no-signal-handlers-under-emscripten.patch`: `InitLLVM` registers no signal callbacks; there are no signals, and LLVM's table of eight entries, two per `main()`, limited a reused instance to four runs. `patches/0006-export-the-flush-function.patch`: the driver target alone gets `-sEXPORTED_FUNCTIONS=_main,_webflash_flush_streams`; in `CMAKE_EXE_LINKER_FLAGS` the same flag makes CMake's configure checks fail, because emcc refuses to link a test program that lacks an exported function. The driver holds exactly the ten tools of the manifest; the other tools that would join it (`dsymutil`, `llvm-symbolizer`, `llvm-rc` and so on) are switched off with their `LLVM_TOOL_<NAME>_BUILD` options.
+</details>
 
-## The sysroot and the multilib map
+<details>
+<summary>The sysroot and the multilib map</summary>
 
 The sysroot mirrors an ATfE installation under `/sysroot` in the instance's MEMFS:
 
@@ -56,8 +59,10 @@ ATfE's `multilib.yaml` carries an `IncludeDirs` key per variant that clang 23.1.
 | `cortex-m33` | `armv8m.main_soft_nofp_unaligned_size` | `sysroot/lib/clang-runtimes/arm-none-eabi/armv8m.main_soft_nofp_unaligned_size/lib` |
 
 `manifest.include` lists the system include directories in the order to pass them (`-isystem` each): the clang resource headers first, then picolibc. `manifest.include_cxx` lists the libc++ directory, to be passed before `include` when compiling C++. Read the paths from the manifest, never hard-code them; a layout change here must never touch the engine.
+</details>
 
-## Invocation forms for the engine
+<details>
+<summary>Invocation forms for the engine</summary>
 
 `toolchain.js` runs one tool per call: `argv[0]` is the tool name, the remaining arguments are passed through unchanged, relative paths resolve against `cwd`. The engine translates GCC command lines per SPEC section 9.4; these are the shapes this toolchain expects and the smoke test exercises.
 
@@ -121,8 +126,10 @@ ld.lld -Bstatic -m armelf -EL -L/sysroot/lib/clang-runtimes/arm-none-eabi/armv6m
        --fat-lto-objects -plugin-opt=mcpu=cortex-m0plus out/vectors.o --gc-sections --print-memory-usage
        -lc -lclang_rt.builtins -lc -u VectorTable --target2=rel -o out/a.elf
 ```
+</details>
 
-## Using toolchain.js
+<details>
+<summary>Using toolchain.js</summary>
 
 ```js
 import { createToolchain } from "./toolchain.js";
@@ -149,42 +156,7 @@ r.memory    // bytes of linear memory the instance ended with
 `createToolchain` fetches `manifest.json`, imports `llvm.js`, decompresses `llvm.wasm.gz` (`DecompressionStream("gzip")`, or the bundled inflate where that API is missing) and compiles it once, and parses `sysroot.tar.gz`. Every `run()` instantiates the compiled module afresh, mounts the sysroot and the given files into the instance's MEMFS without copying (inputs are read-only views of your arrays; a tool cannot change an input in place), changes to `cwd`, calls `main()` and reads back every file under `cwd` that did not exist before. Relative `files` keys and `dirs` entries are taken from `cwd`; parent directories of `files` are created, nothing else is. `runReusing()` keeps one instance alive between calls, which saves the instantiation and sysroot mount of every run. In the release run of build 1 one instance compiled 100 files in a row with no failure and byte-identical outputs, at 40 ms per compile against 56 ms with a fresh instance, while its memory grew from 64 MB to 191 MB (cc1 runs with `-disable-free`, so every compile leaks a little); `dispose()` drops the instance. `run()` stays the default for its isolation; `runReusing()` is a measured option for long builds, worth a `dispose()` after each one. `loadCxx()` fetches the libc++ headers early (otherwise the first `clang++` run does). Options: `fetch` (a fetch-compatible function; `file:` URLs are read from disk under Node without one), `importModule`, `verify` (check every sha256), `onProgress({file, loaded, total})`.
 
 `llvm.js` is an ES module: in a browser load `toolchain.js` from a module worker (`new Worker(url, { type: "module" })`); under Node import it from a directory without a `package.json` that says `commonjs`. There are no threads: parallelism comes from several workers, each with its own `createToolchain()`.
-
-## Reproducing the build
-
-The release workflow (`.github/workflows/build.yml`) runs the scripts of `scripts/` in order on `ubuntu-24.04`; the same scripts run anywhere with git, curl, python3, cmake, ninja, ccache and a C++ compiler:
-
-```
-scripts/00-setup-emsdk.sh      the pinned Emscripten SDK into build/emsdk
-scripts/10-fetch-llvm.sh       sparse shallow clone of llvm-project at the tag, patches applied
-scripts/20-build-tablegen.sh   stage 1: native llvm-tblgen, llvm-min-tblgen, clang-tblgen
-scripts/30-build-llvm.sh       stage 2: emcmake build of the llvm multicall module (LTO=0 skips ThinLTO)
-scripts/40-sysroot.sh          download ATfE, assemble and pack sysroot.tar.gz and sysroot-cxx.tar.gz
-scripts/50-package.sh          manifest.json and toolchain-<id>.tar
-scripts/60-smoke.sh            clone Klipper, generate autoconf.h, node --test on tests/*.test.mjs
-```
-
-`ROOT` sets the build root (default `build/`), `JOBS` the parallelism. The `Dockerfile` runs the same stages in an Ubuntu image (`docker build -t webflash-toolchain .`). `node --test tests/unit.test.mjs` runs the parts that need no build.
-
-Stage 2 configures LLVM with `LLVM_TARGETS_TO_BUILD=ARM`, `LLVM_ENABLE_PROJECTS=clang;lld`, `LLVM_TOOL_LLVM_DRIVER_BUILD=ON`, `LLVM_ENABLE_THREADS=OFF`, no zlib, zstd, libxml2, terminfo, backtraces or crash overrides, `MinSizeRel`, ThinLTO, and links with `-sMODULARIZE -sEXPORT_ES6 -sENVIRONMENT=web,worker,node -sINVOKE_RUN=0 -sEXIT_RUNTIME=0 -sALLOW_MEMORY_GROWTH -sMAXIMUM_MEMORY=4GB -sSTACK_SIZE=8MB -sEXPORTED_RUNTIME_METHODS=FS,callMain,ENV`. See `scripts/30-build-llvm.sh` for the full list and the reasons.
-
-## Releasing
-
-Push a tag `build-<n>` (or run the workflow by hand; `[build].number` of `versions.toml` is the default number). The workflow builds, packages, runs the smoke test on the packed release and creates the GitHub Release `llvm<ver>-atfe<ver>-build<n>` marked latest, with `toolchain-<id>.tar` and `toolchain.tar`. It refuses to rebuild an existing release: bump the number. ccache and the ThinLTO cache are kept in the Actions cache, so a second run of the same pins takes minutes rather than hours.
-
-## Smoke test numbers
-
-Measured by `tests/smoke.test.mjs` under Node 24.22.1 on the `ubuntu-24.04` runner (2 vCPUs) in the release run of build 1 on 2026-11-03, from its `smoke-report` artifact. Times are `main()` only; a fresh instance adds its instantiation and sysroot mount, which the last row measures. The first compile in a process pays about 1 s more for Node's lazy compilation of the module; the table shows later runs.
-
-| Measurement | Value |
-|---|---|
-| `llvm.wasm.gz` | 21,103,163 bytes (59,603,584 uncompressed) |
-| `sysroot.tar.gz` | 1,475,624 bytes, 238 entries (`sysroot-cxx.tar.gz`: 1,731,714 bytes, 1,786 entries) |
-| Klipper `src/sched.c` (stm32g0b1, LTO, fat objects) | 435 ms (`src/command.c`, the slowest: 553 ms; limit 3,000 ms) |
-| Klipper `src/stm32/stm32g0.c` | 278 ms (`src/generic/armcm_boot.c`: 192 ms) |
-| Link of the vector-table program with LTO | 44 ms with the direct `ld.lld` line, 149 ms with the line taken from `clang -###` (11 ms and 75 ms without LTO) |
-| Peak instance memory | 64 MB for every single-run instance; 191 MB after 100 compiles on one reused instance (limit 1,024 MB) |
-| Fresh instance per compile versus a reused instance (average) | 56 ms against 40 ms per compile of the vector-table file with LTO over three CPUs; 100 reused runs, 0 failures, 0 output differences |
+</details>
 
 ## License
 
